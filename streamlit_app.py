@@ -1,216 +1,156 @@
+# sea_level_dashboard.py
 import streamlit as st
 import pandas as pd
 import numpy as np
+import matplotlib.pyplot as plt
+import pydeck as pdk
+from streamlit.components.v1 import iframe
 
-# --- 페이지 기본 설정 ---
-st.set_page_config(
-    page_title="물러서는 땅, 다가오는 바다",
-    page_icon="🌊",
-    layout="wide"
-)
+st.set_page_config(page_title="물러서는 땅, 다가오는 바다 — 해수면 상승 대시보드", layout="wide")
 
-# --- 커스텀 스타일 적용 ---
+st.title("물러서는 땅, 다가오는 바다: 해수면 상승 대시보드")
 st.markdown("""
-<style>
-/* Streamlit 앱의 메인 배경 및 폰트 */
-.stApp {
-    background-color: #0c1445; /* 깊은 바다색 */
-    color: #e0e0e0;
-    font-family: 'Noto Sans KR', sans-serif;
-}
+이 대시보드는  
+- 공공데이터포털(해양환경공단)의 해양기후 변화 CSV 데이터를 사용한 시계열 시각화  
+- KOEM 해수면상승 시뮬레이터(임베드)로 지역별 침수 시뮬레이션 직접 확인  
+- 샘플 연안 도시(저해발 도시) 기반의 간단한 '침수 취약도 데모 맵'을 제공합니다.  
+(정밀한 침수 예측은 고해상도 DEM/연안 지형 데이터 필요)  
+""")
 
-/* 헤더와 제목 스타일 */
-h1 {
-    font-size: 2.8rem;
-    color: #ffffff;
-    text-align: center;
-    text-shadow: 2px 2px 4px #000000;
-}
-h2 {
-    font-size: 2rem;
-    color: #61dafb; /* 밝은 하늘색 포인트 */
-    border-bottom: 2px solid #61dafb;
-    padding-bottom: 10px;
-    margin-top: 40px;
-}
-h3 {
-    font-size: 1.5rem;
-    color: #ffffff;
-    margin-top: 30px;
-}
+# 사이드바: 데이터 소스 설명 및 외부 링크
+st.sidebar.header("데이터 소스")
+st.sidebar.markdown("""
+- 해양환경공단_해양기후 변화 정보 (공공데이터포털) — CSV / API 제공. (예시 데이터: 해수면·해수온 등 시계열). :contentReference[oaicite:1]{index=1}  
+- KOEM 해수면상승 시뮬레이터 — 시나리오(RCP4.5/8.5), 연도별 시뮬레이션(2050/2100 등). (웹 툴을 대시보드에 임베드). :contentReference[oaicite:2]{index=2}
+""")
+st.sidebar.markdown("[공공데이터포털(데이터페이지) 열기](https://www.data.go.kr/data/15003326/fileData.do)")
+st.sidebar.markdown("[KOEM 시뮬레이터 열기](https://www.koem.or.kr/simulation/gmsl/rcp45.do)")
 
-/* 본문 텍스트 스타일 */
-p, li {
-    font-size: 1.1rem;
-    line-height: 1.8;
-}
+st.header("1) 데이터 입력")
+st.markdown("방법 A: 아래에서 CSV 파일 업로드 (data.go.kr에서 다운로드한 CSV를 업로드).  방법 B: 로컬 테스트용 샘플 사용")
 
-/* 인용구 또는 강조 블록 스타일 */
-.report-quote {
-    background-color: rgba(255, 255, 255, 0.05);
-    border-left: 5px solid #61dafb;
-    padding: 20px;
-    margin: 20px 0;
-    border-radius: 5px;
-    font-style: italic;
-}
+uploaded = st.file_uploader("CSV 파일 업로드 (해양기후 변화 데이터)", type=["csv","txt"])
+use_sample = st.checkbox("샘플 데이터로 실행 (빠른 데모)", value=False)
 
-/* 이미지 캡션 스타일 */
-.stImage > figcaption {
-    text-align: center;
-    color: #a0a0a0;
-}
+@st.cache_data
+def load_sample_df():
+    # 데모용 아주 단순한 해수면 시계열 샘플
+    years = np.arange(1993, 2051)
+    # 임의의 누적 해수면(단위: mm) 예시
+    sl = 10 + 2*(years-1993) + np.random.normal(0, 1, len(years))
+    df = pd.DataFrame({"year": years, "sea_level_mm": sl})
+    return df
 
-/* 버튼 스타일 */
-.stButton > button {
-    border: 2px solid #61dafb;
-    border-radius: 20px;
-    color: #61dafb;
-    background-color: transparent;
-}
-.stButton > button:hover {
-    border-color: #ffffff;
-    color: #ffffff;
-    background-color: #61dafb;
-}
+df = None
+if uploaded is not None:
+    try:
+        df = pd.read_csv(uploaded)
+        st.success("CSV 업로드 완료 — 상위 10개 행을 미리보기합니다.")
+        st.dataframe(df.head(10))
+    except Exception as e:
+        st.error(f"CSV 읽기 오류: {e}")
+elif use_sample:
+    df = load_sample_df()
+    st.info("샘플 데이터 사용 중")
+    st.dataframe(df.head(10))
+else:
+    st.info("CSV를 업로드하거나 '샘플 데이터로 실행'을 체크하세요.")
 
-</style>
-""", unsafe_allow_html=True)
+# 데이터 시각화
+if df is not None:
+    st.header("2) 시계열: 해수면 변화(시연)")
+    # 가능한 컬럼명 탐색(사용자 파일에 따라 다름)
+    # 우선 'year'와 해수면 관련 컬럼을 자동 탐지
+    year_col = None
+    seacol = None
+    for c in df.columns:
+        if 'year' in c.lower() or '년도' in c:
+            year_col = c
+        if 'sea' in c.lower() or '해수' in c or 'sea_level' in c.lower() or 'msl' in c.lower():
+            seacol = c
+    # fallback
+    if year_col is None:
+        # 시퀀스 인덱스를 연도로 사용
+        df = df.reset_index().rename(columns={'index':'year'})
+        year_col = 'year'
+    if seacol is None:
+        # 샘플에서는 'sea_level_mm' 존재
+        if 'sea_level_mm' in df.columns:
+            seacol = 'sea_level_mm'
+        else:
+            # pick first numeric that's not year
+            numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+            numeric_cols = [c for c in numeric_cols if c != year_col]
+            if len(numeric_cols)>0:
+                seacol = numeric_cols[0]
+            else:
+                st.warning("해수면 컬럼을 자동으로 찾지 못했습니다. CSV를 확인해 주세요.")
+    if seacol:
+        # plot with matplotlib
+        fig, ax = plt.subplots(figsize=(8,3.5))
+        ax.plot(df[year_col], df[seacol], marker='o', linewidth=2)
+        ax.set_xlabel("Year")
+        ax.set_ylabel(f"{seacol}")
+        ax.set_title("해수면(또는 선택한 숫자 컬럼) 시계열")
+        ax.grid(alpha=0.25)
+        st.pyplot(fig)
 
-# --- 보고서 내용 시작 ---
+    # 요약 통계
+    st.subheader("요약 통계")
+    st.write(df[[year_col, seacol]].describe())
 
-# --- 제목 ---
-st.markdown("<h1>물러서는 땅, 다가오는 바다</h1>", unsafe_allow_html=True)
-st.markdown("<h3 style='text-align: center; color: #a0a0a0;'>해수면 상승의 위험과 우리만의 대처법</h3>", unsafe_allow_html=True)
-st.divider()
+    # 사용자 입력: 시나리오용 슬라이더 (해수면 상승 임의값 적용)
+    st.header("3) 연안 침수 취약도(샘플 데모)")
+    st.markdown("**주의:** 정밀한 침수 시각화는 DEM(지형고도)·조위·파랑 등 복합 데이터 필요. 아래는 '간단한 데모'입니다.")
+    sea_rise_m = st.slider("가정할 해수면 상승 (m)", min_value=0.0, max_value=5.0, value=0.5, step=0.1)
 
-# --- 서론 ---
-st.header("서론: 우리 눈앞에 닥친 현실")
+    # 샘플 연안 도시(위도,경도,평균지면고: m)
+    sample_cities = pd.DataFrame([
+        {"city":"Incheon", "lat":37.4563, "lon":126.7052, "elev_m":1.5},
+        {"city":"Busan", "lat":35.1796, "lon":129.0756, "elev_m":3.0},
+        {"city":"Mokpo", "lat":34.8110, "lon":126.3929, "elev_m":1.2},
+        {"city":"Yeosu", "lat":34.7604, "lon":127.6623, "elev_m":2.0},
+        {"city":"Gangneung", "lat":37.7519, "lon":128.8761, "elev_m":4.0},
+    ])
+
+    sample_cities['would_be_inundated'] = sample_cities['elev_m'] <= sea_rise_m
+    st.dataframe(sample_cities)
+
+    # Map with pydeck
+    midpoint = (sample_cities['lat'].mean(), sample_cities['lon'].mean())
+    # color by inundation
+    sample_cities['color'] = sample_cities['would_be_inundated'].apply(lambda x: [255,0,0] if x else [0,128,255])
+    layer = pdk.Layer(
+        "ScatterplotLayer",
+        data=sample_cities,
+        get_position='[lon, lat]',
+        get_color='color',
+        get_radius=5000,
+        pickable=True,
+    )
+    view_state = pdk.ViewState(latitude=midpoint[0], longitude=midpoint[1], zoom=5, pitch=0)
+    r = pdk.Deck(layers=[layer], initial_view_state=view_state, tooltip={"text":"{city}\nelev: {elev_m} m\n침수: {would_be_inundated}"})
+    st.pydeck_chart(r)
+
+    st.markdown("""
+    **해석 예시:** 위 표/맵은 '도시 평균 지면고 <= 가정 해수면 상승'이면 간단히 '침수 가능'으로 표기한 **매우 단순한 데모**입니다.
+    실제 연안 침수 예측을 위해선 국토지리정보원의 DEM(표고), 해수위·조석, 기후 시나리오별 지역별 보정이 필요합니다.
+    """)
+
+# KOEM 시뮬레이터 임베드
+st.header("4) KOEM 해수면상승 시뮬레이터 (직접 조작)")
+st.markdown("아래 임베드 툴에서 시나리오(예: RCP4.5/RCP8.5), 연도(2050/2100), 슬라이더 등을 이용해 지역별 침수 시뮬레이션을 직접 보세요.")
+# KOEM 페이지를 iframe으로 임베드 (서버 정책에 따라 임베딩이 막힐 수 있음)
+koem_url = "https://www.koem.or.kr/simulation/gmsl/rcp45.do"
+try:
+    iframe(koem_url, height=700)
+except Exception as e:
+    st.error("브라우저/사이트의 임베딩 정책으로 임베드가 실패했습니다. 오른쪽 링크를 눌러 새 탭에서 열어주세요.")
+    st.markdown(f"[KOEM 시뮬레이터 새탭에서 열기]({koem_url})")
+
+st.header("마무리 및 사용팁")
 st.markdown("""
-<p class="report-quote">
-인류의 기술이 나날이 발전함과 동시에 세상은 황폐해져 가고 있습니다.<br>
-기온은 해마다 오르고, 북극과 남극의 빙하는 녹아내리며, 남극에서는 아름다운 꽃을 볼 수 있게 되었습니다. 바다는 따뜻해지고 해수면은 조용히 그러나 확실하게 높아지고 있습니다.
-</p>
-""", unsafe_allow_html=True)
-st.write("""
-지금 이 순간에도 우리 삶의 터전은 서서히 잠식당하고 있는 것입니다.
-이 보고서는 아직 해수면 상승의 심각성을 와닿지 못하는 청소년들에게 그 위험을 알리고, 우리가 반드시 선택해야 할 대처 방안을 제시하고자 합니다. 훗날 가까운 미래에 세상을 이끌어 갈 청소년 여러분이 이 문제를 외면한다면, 결국 그 피해는 여러분의 세대가 고스란히 떠안게 될 것입니다.
+- 정확한 연안 침수 예측을 하려면: **고해상 DEM(수미터 이하), 상세 연안형상, 기후 시나리오(지역 보정)** 등을 확보해야 합니다.  
+- `data.go.kr`의 CSV(또는 오픈API)를 직접 불러오려면 해당 데이터의 '원문파일' 링크나 오픈API 키(발급 후)를 사용하세요. (공공데이터포털은 파일 다운로드 및 OpenAPI(JSON/XML) 제공). :contentReference[oaicite:3]{index=3}  
+- KOEM 시뮬레이터는 이미 위의 요소들을 이용해 시뮬레이션한 결과를 보여주는 도구이므로, 대시보드에서 **임베드**해서 직접 값을 조작해보시면 교육용/설명용으로 매우 효과적입니다. :contentReference[oaicite:4]{index=4}
 """)
-
-# --- 설문 자료 시각화 ---
-st.subheader("청소년 인식 설문 (가상 데이터)")
-st.write("청소년들은 아직 해수면 상승의 문제에 대해 정확하게 인지하지 못하고 있으며, 지금부터 이 보고서를 통해 그 현실이 우리에게도 멀지 않았음을 알려주려 합니다.")
-
-# 가상 데이터 생성 (가로 차트로 변경)
-chart_data = pd.DataFrame({
-    '비율 (%)': [15, 35, 25, 15, 10]
-}, index=['매우 심각', '어느 정도 심각', '보통', '심각하지 않음', '전혀 모름'])
-st.bar_chart(chart_data, horizontal=True, color="#61dafb")
-st.caption("그래프: '해수면 상승 문제의 심각성을 체감하십니까?'에 대한 가상 설문 결과")
-
-# --- 우리나라 연안 해수면 상승 데이터 시각화 (공공데이터 기반) ---
-st.subheader("우리나라 연안의 해수면 상승 현황 (공공데이터 기반)")
-st.write("국립해양조사원(KHOA)의 관측 자료에 따르면, 우리나라 연안의 해수면 역시 꾸준히 상승하고 있습니다. 아래 그래프는 주요 관측소의 지난 20여 년간 연평균 해수면 높이 변화를 보여줍니다.")
-
-# 공공데이터포털 자료를 기반으로 한 시뮬레이션 데이터 생성
-# 실제 데이터는 연도별 평균 상승률과 변동성을 반영하여 생성
-years = np.arange(2000, 2024)
-data = {
-    '연도': years,
-    # 관측소별 실제 평균 상승률(mm/year)을 기반으로 시뮬레이션: 제주(5.6), 인천(3.4), 목포(3.2), 부산(2.6)
-    '제주': (np.linspace(0, 23 * 5.6, 24) + np.random.normal(0, 8, 24)),
-    '인천': (np.linspace(0, 23 * 3.4, 24) + np.random.normal(0, 8, 24)),
-    '목포': (np.linspace(0, 23 * 3.2, 24) + np.random.normal(0, 8, 24)),
-    '부산': (np.linspace(0, 23 * 2.6, 24) + np.random.normal(0, 8, 24)),
-}
-real_sea_level_df = pd.DataFrame(data)
-
-# 2000년도 값을 0으로 기준점 조정
-for col in ['제주', '인천', '목포', '부산']:
-    real_sea_level_df[col] = real_sea_level_df[col] - real_sea_level_df[col].iloc[0]
-
-real_sea_level_df = real_sea_level_df.set_index('연도')
-
-st.line_chart(real_sea_level_df, color=["#ff4b4b", "#ffaa00", "#00bfff", "#00ff00"])
-st.caption("그래프: 2000년 대비 우리나라 주요 관측소의 연평균 해수면 높이 변화(mm). 데이터는 국립해양조사원 발표 자료를 기반으로 한 시뮬레이션 수치입니다.")
-st.divider()
-
-
-# --- 본론 1 ---
-st.header("본론 1: 데이터가 경고하는 미래")
-st.subheader("2050년, 물에 잠길 대한민국과 세계")
-st.image("https://assets.climatecentral.org/images/made/5-2-22_KR_Incheon_Airport_comparison_map_1050_665_80_s_c1.jpg",
-         caption="NASA의 데이터를 기반으로 Climate Central이 예측한 2050년 인천국제공항 일대의 침수 예상도")
-
-st.write("""
-위 지도는 2050년을 가정해 해수면 상승으로 잠기게 될 대한민국의 주요 도시와 세계 각국의 연안을 보여줍니다. 단순한 그림이 아니라, 과학적 데이터와 시뮬레이션을 바탕으로 만들어진 미래의 경고장입니다. 인천과 전라도의 주요 도시들 뿐 아니라 세계의 수많은 항구 도시들이 물속에 잠길 수 있다는 사실은 더 이상 영화 속 상상이 아닙니다.
-
-지금 우리가 아무런 행동을 하지 않는다면, 2050년의 이 지도는 ‘예상도’가 아니라 ‘현실의 풍경’이 될 것입니다. 결국 그 피해를 고스란히 짊어지게 되는 세대가 바로 여러분입니다. 따라서 지금 이 순간부터 기후 변화와 해수면 상승 문제를 ‘내 문제’로 인식하고, 일상 속 작은 실천부터 시작해야 합니다.
-""")
-st.divider()
-
-# --- 본론 2 ---
-st.header("본론 2: 이미 시작된 재앙, 투발루의 눈물")
-st.write("""
-해수면 상승은 단순한 자연 현상이 아니라 실제로 여러 나라에서 심각한 피해를 일으키고 있습니다. 이러한 피해 사건들을 살펴보면 해수면 상승이 우리 생활과 안전에 어떤 영향을 주는지 더 잘 알 수 있습니다.
-""")
-
-col1, col2 = st.columns([1, 2])
-
-with col1:
-    st.image("https://img.hani.co.kr/imgdb/original/2021/1109/20211109502389.jpg",
-             caption="2021년, 물에 잠긴 국토에서 기후변화협약 당사국총회(COP26) 영상 연설을 하는 투발루 외교장관")
-
-with col2:
-    st.subheader("사라지는 섬나라, 투발루")
-    st.write("""
-    투발루는 남태평양에 있는 작은 섬나라로, 평균 해발고도가 2~3m밖에 되지 않아 해수면 상승에 가장 큰 위협을 받고 있습니다. 실제로 바닷물이 섬 마을로 밀려들어와 농경지가 침수되고 식수원이 오염되는 일이 자주 발생합니다.
-
-    이 때문에 주민들이 살 곳을 잃고, 호주나 뉴질랜드 등으로 이주하는 ‘환경 난민’ 문제가 생기고 있습니다. 전문가들은 앞으로 해수면이 계속 높아진다면 투발루라는 나라 자체가 지도에서 사라질 수 있다고 경고하고 있습니다. 21세기 아틀란티스로 불리는 이유입니다.
-    
-    투발루는 현재 여러 나라들에게 자국민의 대한 이민을 요청하였으나 거부당하고 있는 안타까운 상황에 처해있습니다.
-    """)
-st.divider()
-
-# --- 결론 ---
-st.header("결론: 투발루의 절박함, 우리의 미래")
-st.write("""
-해수면 상승은 더 이상 먼 미래의 이야기가 아닌, 우리 눈앞에 닥친 현실입니다. 남태평양의 작은 섬나라 투발루는 해수면 상승의 가장 비극적인 예시를 보여줍니다. 평균 해발고도가 2~3m에 불과한 이 나라는 국토 전체가 물에 잠길 위기에 처해 있으며, 이로 인해 국민들은 삶의 터전을 잃고 '환경 난민'으로 전락할 위기에 놓였습니다.
-
-투발루의 대통령이 직접 물에 잠긴 곳에서 연설하며 국제 사회에 도움을 호소하고 있지만, 여러 국가로부터 이민 요청이 거부당하는 안타까운 현실은 해수면 상승이 단순한 환경 문제를 넘어 국가의 생존과 인간의 존엄성까지 위협하는 심각한 재앙임을 명백히 보여줍니다. 투발루의 절박한 외침은 곧 대한민국을 포함한 전 세계 해안 도시들이 마주할 미래의 경고입니다.
-""")
-st.divider()
-
-
-# --- 대처 방안 ---
-st.header("우리가 선택해야 할 대처 방안")
-
-with st.expander("🌍 온실가스 감축 (지구 온난화 완화)"):
-    st.markdown("""
-    - **에너지 전환:** 화석 연료(석탄, 석유) 사용을 줄이고 태양광, 풍력 등 신재생에너지 사용을 확대합니다.
-    - **에너지 효율 개선:** 에너지 효율이 높은 제품을 사용하고, 건물 단열을 강화하여 불필요한 에너지 소비를 줄입니다.
-    """)
-
-with st.expander("🛡️ 해안 지역 적응 및 보호"):
-    st.markdown("""
-    - **방파제 및 해안 방조제 건설:** 해안 지역에 물리적인 방어벽을 설치하여 침수를 막습니다.
-    - **자연 해안선 복원:** 맹그로브 숲, 갯벌 등 자연적인 해안 방어선을 복원하고 조성하여 파도의 영향을 완충합니다.
-    - **연안 관리 계획 수립:** 해수면 상승에 취약한 지역의 개발을 제한하고, 주민들의 안전한 이주 계획을 미리 수립합니다.
-    """)
-
-with st.expander("🚶‍♂️ 개인의 일상 속 실천"):
-    st.markdown("""
-    - **에너지 절약:** 사용하지 않는 전등을 끄고, 대중교통을 이용하는 등 일상생활에서 에너지 소비를 줄입니다.
-    - **자원 재활용 및 소비 줄이기:** 불필요한 소비를 줄이고, 쓰레기 분리배출을 철저히 하여 자원의 낭비를 막습니다.
-    - **환경 문제에 대한 관심과 참여:** 기후 변화와 해수면 상승 문제의 심각성을 인지하고, 관련 정책이나 캠페인에 관심을 갖고 참여합니다.
-    """)
-st.divider()
-
-# --- 제언 ---
-st.header("제언: 미래를 위한 행동")
-st.markdown("""
-<p class="report-quote">
-해수면 상승은 개인의 노력을 넘어, 공동의 목소리를 내는 적극적인 행동이 필요합니다. 학교 환경 동아리 활동이나 지역 사회의 환경 캠페인에 참여하여 더 많은 사람들의 관심과 동참을 이끌어내야 합니다.
-</p>
-""", unsafe_allow_html=True)
-```eof
