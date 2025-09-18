@@ -1,225 +1,245 @@
-# sea_level_dashboard_full.py
 import streamlit as st
 import pandas as pd
 import numpy as np
-import matplotlib
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
 import pydeck as pdk
 import requests
 from io import StringIO
 
-st.set_page_config(page_title="물러서는 땅, 다가오는 바다 — 해수면 상승 대시보드", layout="wide")
-st.title("물러서는 땅, 다가오는 바다: 해수면 상승 대시보드")
+# --- 페이지 기본 설정 ---
+st.set_page_config(
+    page_title="물러서는 땅, 다가오는 바다",
+    page_icon="🌊",
+    layout="wide"
+)
 
-# ====== 사이드바: 개요 및 투발루 사례 ======
-st.sidebar.header("보고서 요약 & 투발루 사례")
-st.sidebar.markdown("""
-이 대시보드는 1900→2025(현재)까지의 지구 평균 해수면 변화를 보여주고,
-사용자가 직접 데이터를 업로드하거나 슬라이더로 해수면 상승을 조작해 연안 취약도를 시각화할 수 있습니다.
-""")
-
-st.sidebar.subheader("투발루 (사례)")
-st.sidebar.markdown("""
-- 평균 해발고 약 2 m, 이미 수십 년간 해수면 상승과 침수 문제로 어려움을 겪어왔습니다.  
-- 최근 수년간 호주 등으로의 이주·기후 비자 논의 및 신청이 활발해지고 있습니다(예: Falepili 관련 이민 방식 등).  
-(보도·정책 동향 요약: Reuters/Wired 등).  
-""")
-st.sidebar.markdown("출처: Reuters, Wired 등 주요 보도 요약. :contentReference[oaicite:6]{index=6}")
-
+# --- 커스텀 스타일 적용 ---
 st.markdown("""
-### 사용법 (간단)
-1. (선택) `data.go.kr`에서 CSV를 다운받아 업로드하면 해당 관측 데이터로 그래프가 갱신됩니다. (예: https://www.data.go.kr/data/15003326/fileData.do). :contentReference[oaicite:7]{index=7}  
-2. 업로드가 없으면 '관측/재구성 시계열'을 자동 생성하여 1900–2025 그래프를 보여줍니다(교육/설명 목적의 추정치).  
-3. 오른쪽의 '해수면 상승(m)' 슬라이더로 가상 상승을 조정하면 연안 취약도(샘플 도시/투발루)가 갱신됩니다.
-""")
+<style>
+/* Streamlit 앱의 메인 배경 및 폰트 */
+.stApp {
+    background-color: #0c1445; /* 깊은 바다색 */
+    color: #e0e0e0;
+    font-family: 'Noto Sans KR', sans-serif;
+}
 
-# ====== 데이터 로드 섹션 ======
-st.header("데이터: 업로드 또는 자동(추정) 시계열")
-uploaded = st.file_uploader("관측 CSV 업로드 (옵션) — data.go.kr에서 받으신 파일을 올려주세요", type=["csv","txt"])
-use_remote_noaa = st.checkbox("NOAA/NASA 공개 시계열 자동 불러오기 시도 (가능하면)", value=False)
+/* 헤더와 제목 스타일 */
+h1 {
+    font-size: 2.8rem;
+    color: #ffffff;
+    text-align: center;
+    text-shadow: 2px 2px 4px #000000;
+}
+h2 {
+    font-size: 2rem;
+    color: #61dafb; /* 밝은 하늘색 포인트 */
+    border-bottom: 2px solid #61dafb;
+    padding-bottom: 10px;
+    margin-top: 40px;
+}
+h3 {
+    font-size: 1.5rem;
+    color: #ffffff;
+    margin-top: 30px;
+}
 
+/* 본문 텍스트 스타일 */
+p, li {
+    font-size: 1.1rem;
+    line-height: 1.8;
+}
+
+/* 인용구 또는 강조 블록 스타일 */
+.report-quote {
+    background-color: rgba(255, 255, 255, 0.05);
+    border-left: 5px solid #61dafb;
+    padding: 20px;
+    margin: 20px 0;
+    border-radius: 5px;
+    font-style: italic;
+}
+
+/* 사이드바 스타일 */
+.st-emotion-cache-16txtl3 {
+    background-color: rgba(0, 0, 0, 0.2);
+}
+
+</style>
+""", unsafe_allow_html=True)
+
+# --- 제목 ---
+st.markdown("<h1>물러서는 땅, 다가오는 바다</h1>", unsafe_allow_html=True)
+st.markdown("<h3 style='text-align: center; color: #a0a0a0;'>해수면 상승 인터랙티브 대시보드</h3>", unsafe_allow_html=True)
+st.divider()
+
+# --- 서론 (기존 보고서 내용) ---
+st.header("서론: 우리 눈앞에 닥친 현실")
+st.markdown("""
+<p class="report-quote">
+인류의 기술이 나날이 발전함과 동시에 세상은 황폐해져 가고 있습니다.<br>
+기온은 해마다 오르고, 북극과 남극의 빙하는 녹아내리며, 남극에서는 아름다운 꽃을 볼 수 있게 되었습니다. 바다는 따뜻해지고 해수면은 조용히 그러나 확실하게 높아지고 있습니다.
+</p>
+""", unsafe_allow_html=True)
+st.write("지금 이 순간에도 우리 삶의 터전은 서서히 잠식당하고 있는 것입니다. 이 대시보드는 해수면 상승의 심각성을 데이터로 직접 확인하고, 미래의 위험을 시뮬레이션하며, 우리가 나아가야 할 길을 함께 고민하고자 합니다.")
+st.divider()
+
+# --- 데이터 로드 및 시각화 섹션 ---
+st.header("1. 과거와 현재: 해수면 상승 데이터 분석")
+
+# --- 데이터 로드 로직 ---
 def build_estimated_gmsl():
-    """
-    교육용/설명용 추정 시계열 생성 (1900-2025).
-    방법: 1900-1920~1992: 전세계 장기 평균 1.75 mm/yr(문헌 근거) 수준(근사),
-           1993-2025: 위성시대 평균 ~3.3 mm/yr 구간으로 가속 반영.
-    이 수치는 '정밀 관측' 대체가 아님 — 실제 관측치가 있으면 업로드/연동하세요.
-    출처: 관측·재구성 연구 및 NOAA/NASA 개요. :contentReference[oaicite:8]{index=8}
-    """
+    """ 교육용/설명용 추정 시계열 생성 (1900-2025) """
     years = np.arange(1900, 2026)
     gmsl_mm = np.zeros_like(years, dtype=float)
-    # baseline: 1900 -> 0 mm (상대적)
     for i, y in enumerate(years):
         if y <= 1992:
-            # 1900-1992: 평균 1.75 mm/yr (근사, 관측 기반 재구성 연구)
             gmsl_mm[i] = (y - 1900) * 1.75
         else:
-            # 1993 onwards: 누적 전구간 (1900-1992) + (1993->y) * 3.3 mm/yr (위성시대 가속 반영)
-            gmsl_mm[i] = (1992 - 1900) * 1.75 + (y - 1992) * 3.3
+            gmsl_mm[i] = (1992 - 1900) * 1.75 + (y - 1992) * 3.4
     df = pd.DataFrame({"year": years, "gmsl_mm": gmsl_mm})
     return df
 
+# Streamlit의 컬럼 기능을 사용하여 UI 구성
+col1, col2 = st.columns(2)
+
+with col1:
+    st.subheader("데이터 선택")
+    st.info("아래 옵션을 선택하여 해수면 데이터를 불러올 수 있습니다. 선택하지 않으면 1900-2025년 추정치가 자동으로 표시됩니다.")
+    uploaded_file = st.file_uploader("CSV 업로드 (data.go.kr)", type=["csv", "txt"])
+    use_remote_noaa = st.checkbox("NOAA/NASA 공개 데이터 자동 불러오기 (권장)", value=True)
+
 df = None
-if uploaded is not None:
+if uploaded_file is not None:
     try:
-        df = pd.read_csv(uploaded)
-        st.success("업로드한 CSV 로드 완료 — 아래 미리보기(상위 10행)")
-        st.dataframe(df.head(10))
-        # 간단한 자동 컬럼 탐색: 'year'와 숫자 컬럼 찾기
-        # (사용자가 올린 파일이 1900-2025 GMSL을 포함하면 이를 사용)
+        # data.go.kr에서 받은 파일은 한글 인코딩 문제가 있을 수 있음
+        df = pd.read_csv(uploaded_file, encoding='cp949')
+        # '연평균' 컬럼명을 표준화
+        if '연평균(cm)' in df.columns:
+            df['gmsl_mm'] = df['연평균(cm)'] * 10
+        if '연도' in df.columns:
+            df = df.rename(columns={'연도': 'year'})
+        st.success("업로드한 CSV 로드 완료!")
     except Exception as e:
-        st.error(f"CSV 로드 오류: {e}")
-        st.info("자동 생성 추정 시계열을 대신 사용합니다.")
+        st.error(f"CSV 로드 오류: {e}. 인코딩을 확인하거나 다른 파일을 사용해주세요.")
         df = build_estimated_gmsl()
+
 elif use_remote_noaa:
-    # 시도: NOAA/NASA 공개 데이터 자동 가져오기 시도 (여건에 따라 실패 가능)
-    st.info("원격 NOAA/NASA 시계열을 가져오려 시도합니다(인터넷 연결/URL 접근성에 따라 실패할 수 있음).")
-    # 예시 시도 URL (여러 포맷 가능) — 실패 시 추정값 사용
-    tried = False
-    tried_urls = [
-        # (주의: 실제 서비스의 CSV URL이 변경될 수 있으므로 예외 처리 중요)
-        "https://www.star.nesdis.noaa.gov/socd/lsa/SeaLevelRise/sl_lin_global.csv",
-        "https://climate.nasa.gov/system/internal_resources/details/original/647_GlobalMeanSeaLevel.csv"
-    ]
-    for url in tried_urls:
-        try:
-            r = requests.get(url, timeout=10)
-            if r.status_code == 200 and len(r.text) > 100:
-                df = pd.read_csv(StringIO(r.text))
-                st.success(f"원격 데이터 로드 성공: {url}")
-                st.dataframe(df.head(10))
-                tried = True
-                break
-        except Exception:
-            continue
-    if not tried:
-        st.warning("원격 데이터 자동 로드 실패 — 내부 추정 시계열을 사용합니다.")
+    url = "https://www.star.nesdis.noaa.gov/socd/lsa/SeaLevelRise/slr/slr_sla_gbl_free_txj1j2_90.csv"
+    try:
+        response = requests.get(url)
+        csv_data = StringIO(response.text)
+        df_noaa = pd.read_csv(csv_data, header=1)
+        # NOAA 데이터 가공
+        df_noaa = df_noaa.rename(columns={'year': 'year', 'TOPEX/Poseidon': 'gmsl_mm'})
+        # 1993년 이전 데이터와 결합하기 위해 기준점 조정
+        df_estimated = build_estimated_gmsl()
+        df_noaa['gmsl_mm'] = df_noaa['gmsl_mm'] - df_noaa['gmsl_mm'].iloc[0] + df_estimated[df_estimated['year']==1993]['gmsl_mm'].iloc[0]
+        df = df_noaa[['year', 'gmsl_mm']]
+        st.success("NOAA 위성 데이터 로드 완료!")
+    except Exception:
+        st.warning("원격 데이터 로드 실패. 내부 추정 시계열을 사용합니다.")
         df = build_estimated_gmsl()
 else:
-    st.info("업로드된 파일 없음 — 내부 추정 시계열을 사용합니다.")
     df = build_estimated_gmsl()
 
-# 표준화: 내부 추정 또는 업로드 데이터가 'year' 와 'gmsl_mm' 형태가 아니면 시도 변환
+# 데이터프레임 표준화 및 gmsl_mm 컬럼 찾기
 if 'year' not in df.columns:
-    # 유연 처리: 첫 숫자 컬럼을 year로 간주하거나 인덱스 사용
-    numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
-    if len(numeric_cols) >= 1:
-        # assume first numeric is year if plausible
-        first = numeric_cols[0]
-        if df[first].min() >= 1800 and df[first].max() <= 2100:
-            df = df.rename(columns={first: 'year'})
-    if 'year' not in df.columns:
-        df = df.reset_index().rename(columns={'index': 'year'})
-
-# 해수면 컬럼 찾기
-gmsl_col = None
-for c in df.columns:
-    if 'sea' in c.lower() or 'gmsl' in c.lower() or 'level' in c.lower() or 'mm' in c.lower():
-        gmsl_col = c
-        break
-if gmsl_col is None:
-    # fallback: pick first numeric not year
-    numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
-    numeric_cols = [c for c in numeric_cols if c != 'year']
-    if len(numeric_cols) > 0:
-        gmsl_col = numeric_cols[0]
+    year_like_col = [c for c in df.columns if 'year' in str(c).lower() or '연도' in str(c)]
+    if year_like_col:
+        df = df.rename(columns={year_like_col[0]: 'year'})
     else:
-        st.error("해수면(숫자) 컬럼을 자동으로 찾지 못했습니다. 업로드한 CSV를 확인하세요.")
-        st.stop()
+        df = df.reset_index().rename(columns={'index':'year'}) # Fallback
 
-# ====== 시계열 그래프와 숫자 ======
-st.header("1900 → 2025: 지구 평균 해수면 (관측/추정)")
-df_plot = df.copy()
-# 필터 1900-2025
-df_plot = df_plot[(df_plot['year'] >= 1900) & (df_plot['year'] <= 2025)].sort_values('year')
-fig, ax = plt.subplots(figsize=(10,4))
-ax.plot(df_plot['year'], df_plot[gmsl_col], marker='o', linewidth=1.5)
-ax.set_xlabel("Year")
-ax.set_ylabel("Global Mean Sea Level (mm, baseline 1900=0)")
-ax.set_title("Global Mean Sea Level: 1900 → 2025 (관측/추정)")
-ax.grid(alpha=0.2)
-st.pyplot(fig)
+if 'gmsl_mm' not in df.columns:
+    level_like_col = [c for c in df.columns if 'level' in str(c).lower() or 'gmsl' in str(c).lower() or '해수면' in str(c) or '연평균' in str(c)]
+    if level_like_col:
+        df = df.rename(columns={level_like_col[0]:'gmsl_mm'})
+    else:
+        # Fallback to first numeric column
+        numeric_cols = df.select_dtypes(include=np.number).columns
+        if len(numeric_cols) > 1:
+            df = df.rename(columns={numeric_cols[1]:'gmsl_mm'})
 
-# 현재(2025) 기준 숫자 보여주기
-latest = df_plot[df_plot['year'] == df_plot['year'].max()]
-if not latest.empty:
-    latest_val = float(latest[gmsl_col].values[0])
-    st.metric(label=f"현재(연도 {int(latest['year'].values[0])}) 상대 해수면 상승", value=f"{latest_val:.1f} mm", delta=None)
+# --- 데이터 시각화 ---
+with col2:
+    st.subheader("지구 평균 해수면 변화 (1900-현재)")
+    df_plot = df.copy()
+    df_plot = df_plot[(df_plot['year'] >= 1900) & (df_plot['year'] <= 2025)].sort_values('year')
+    
+    # 1900년 값을 0으로 기준점 조정
+    df_plot['gmsl_mm'] = df_plot['gmsl_mm'] - df_plot[df_plot['year'] == 1900]['gmsl_mm'].iloc[0] if 1900 in df_plot['year'].values else df_plot['gmsl_mm'] - df_plot['gmsl_mm'].iloc[0]
+    
+    st.line_chart(df_plot.rename(columns={'year':'index'}).set_index('index')['gmsl_mm'], color="#ff4b4b")
+    
+    latest_year = int(df_plot['year'].max())
+    latest_val = float(df_plot[df_plot['year'] == latest_year]['gmsl_mm'].values[0])
+    st.metric(label=f"{latest_year}년 기준 상대 해수면 상승", value=f"{latest_val:.1f} mm", delta=f"{latest_val - float(df_plot[df_plot['year'] == latest_year-1]['gmsl_mm'].values[0]):.1f} mm (전년 대비)")
 
-# ====== 인터랙티브: 해수면 상승(m) 슬라이더로 연안 영향 데모 ======
-st.header("인터랙션: 가정 해수면 상승을 직접 조작해보기")
-sea_rise_m = st.slider("가정할 추가 해수면 상승 (m)", 0.0, 5.0, 0.5, step=0.1)
-st.markdown("아래 표/지도는 **간단한 교육용 데모**입니다. 정밀 침수 예측은 DEM(지형고도), 조석, 지역 상대해수면 변화(RSL) 등 추가 데이터가 필요합니다.")
+st.caption("그래프: 1900년 대비 지구 평균 해수면 높이 변화(mm). 데이터는 선택된 소스(업로드/NOAA/추정치)를 기반으로 합니다.")
+st.divider()
 
-# 샘플 연안 도시 + 투발루 위치
-sample = pd.DataFrame([
-    {"place":"Funafuti (Tuvalu, capital atoll)", "lat":-8.5240, "lon":179.1942, "elev_m":1.5},
-    {"place":"Incheon (Korea)", "lat":37.4563, "lon":126.7052, "elev_m":1.5},
-    {"place":"Busan (Korea)", "lat":35.1796, "lon":129.0756, "elev_m":3.0},
-    {"place":"Amsterdam (Netherlands)", "lat":52.3702, "lon":4.8952, "elev_m":-2.0},
-    {"place":"Bangladesh coast (sample)", "lat":23.684994, "lon":90.356331, "elev_m":1.0},
+# --- 인터랙티브 시뮬레이션 섹션 ---
+st.header("2. 미래 시뮬레이션: 해수면 상승 영향 분석")
+sea_rise_m = st.slider("가상으로 해수면을 높여보세요 (단위: m)", 0.0, 5.0, 1.0, step=0.1)
+st.markdown("오른쪽 슬라이더를 조작하면, 설정한 높이보다 평균 해발고도가 낮은 주요 지역들이 지도에 붉게 표시됩니다.")
+
+# 샘플 도시 데이터
+sample_cities = pd.DataFrame([
+    {"place":"투발루 푸나푸티", "lat":-8.5240, "lon":179.1942, "elev_m":1.5},
+    {"place":"대한민국 인천", "lat":37.4563, "lon":126.7052, "elev_m":3.5},
+    {"place":"대한민국 부산", "lat":35.1796, "lon":129.0756, "elev_m":2.8},
+    {"place":"네덜란드 암스테르담", "lat":52.3702, "lon":4.8952, "elev_m":-2.0},
+    {"place":"베트남 호치민", "lat":10.8231, "lon":106.6297, "elev_m":1.5},
+    {"place":"미국 뉴올리언스", "lat":29.9511, "lon":-90.0715, "elev_m":-0.5}
 ])
-sample['inundated_by_slider'] = sample['elev_m'] <= sea_rise_m
-st.dataframe(sample.assign(elev_m=lambda d: d['elev_m'].map(lambda x: f"{x} m")))
+sample_cities['inundated'] = sample_cities['elev_m'] <= sea_rise_m
+sample_cities['color'] = sample_cities['inundated'].apply(lambda x: [220, 20, 60] if x else [30, 144, 255])
 
-# 지도: pydeck
-sample['color'] = sample['inundated_by_slider'].apply(lambda x: [220, 30, 30] if x else [30, 120, 220])
-mid = (sample['lat'].mean(), sample['lon'].mean())
+# Pydeck 지도 시각화
+mid_point = (sample_cities['lat'].mean(), sample_cities['lon'].mean())
 layer = pdk.Layer(
     "ScatterplotLayer",
-    data=sample,
+    data=sample_cities,
     get_position='[lon, lat]',
     get_color='color',
     get_radius=80000,
     pickable=True
 )
-view = pdk.ViewState(latitude=mid[0], longitude=mid[1], zoom=2)
-tooltip = {"text":"{place}\nelev: {elev_m} m\n침수(예측): {inundated_by_slider}"}
-r = pdk.Deck(layers=[layer], initial_view_state=view, tooltip=tooltip)
+view_state = pdk.ViewState(latitude=mid_point[0], longitude=mid_point[1], zoom=1, bearing=0, pitch=0)
+tooltip = {"html": "<b>{place}</b><br/>평균 해발고도: {elev_m} m<br/><b>침수 위험: {inundated}</b>", "style": {"color": "white"}}
+r = pdk.Deck(layers=[layer], initial_view_state=view_state, tooltip=tooltip, map_style='mapbox://styles/mapbox/dark-v9')
 st.pydeck_chart(r)
+st.caption("주의: 위 지도는 단순 '평균 해발고도' 비교를 통한 교육용 데모이며, 실제 침수 범위는 조석, 지형, 방어 시설 등에 따라 달라집니다.")
+st.divider()
 
+# --- 본론/결론/대처방안 (기존 보고서 내용) ---
+# --- 본론 2 ---
+st.header("사례 연구: 이미 시작된 재앙, 투발루의 눈물")
+col1, col2 = st.columns([1, 2])
+with col1:
+    st.image("https://img.hani.co.kr/imgdb/original/2021/1109/20211109502389.jpg",
+             caption="2021년, 물에 잠긴 국토에서 연설하는 투발루 외교장관")
+with col2:
+    st.subheader("사라지는 섬나라, 투발루")
+    st.write("투발루는 평균 해발고도가 2~3m에 불과하여 해수면 상승에 가장 큰 위협을 받고 있습니다. 바닷물 유입으로 농경지와 식수원이 오염되고, 주민들은 '환경 난민'이 되어 이주를 고민하고 있습니다. 투발루의 현실은 해수면 상승이 단순한 환경 문제를 넘어 국가의 생존과 인간의 존엄성까지 위협하는 재앙임을 보여줍니다.")
+
+st.divider()
+# --- 결론 ---
+st.header("결론: 투발루의 절박함, 우리의 미래")
+st.write("해수면 상승은 더 이상 먼 미래의 이야기가 아닌, 우리 눈앞에 닥친 현실입니다. 투발루의 절박한 외침은 곧 대한민국을 포함한 전 세계 해안 도시들이 마주할 미래의 경고입니다.")
+st.divider()
+# --- 대처 방안 ---
+st.header("우리가 선택해야 할 대처 방안")
+with st.expander("🌍 온실가스 감축 (지구 온난화 완화)"):
+    st.markdown("- **에너지 전환:** 화석 연료 사용을 줄이고 태양광, 풍력 등 신재생에너지 사용을 확대합니다.\n- **에너지 효율 개선:** 에너지 효율이 높은 제품 사용 및 건물 단열을 강화합니다.")
+with st.expander("🛡️ 해안 지역 적응 및 보호"):
+    st.markdown("- **물리적 방어:** 방파제 및 해안 방조제를 건설하여 침수를 막습니다.\n- **자연 기반 해법:** 맹그로브 숲, 갯벌 등 자연 해안선을 복원하여 파도를 완충합니다.")
+with st.expander("🚶‍♂️ 개인의 일상 속 실천"):
+    st.markdown("- **에너지 절약:** 불필요한 전등 끄기, 대중교통 이용 등 에너지 소비를 줄입니다.\n- **자원 재활용 및 소비 줄이기:** 불필요한 소비를 줄이고 분리배출을 철저히 합니다.")
+st.divider()
+# --- 제언 ---
+st.header("제언: 미래를 위한 행동")
 st.markdown("""
-**해석:** 위 지도는 단순 비교(지역 평균 지면고 <= 가정 상승 높이 → '침수 가능')로 표시한 교육용 데모입니다.  
-정밀한 침수 경계는 고해상 DEM·조석·해안구조물·지역 해수면 변동 등을 반영해야 합니다.
-""")
-
-# ====== 투발루 상세 정보 패널(최신 보도 요약 포함) ======
-st.header("사례 심층: 투발루 (Tuvalu) — 현재 상황 요약")
-st.markdown("""
-- 투발루는 남태평양의 저평탄 섬나라로 평균 해발고가 약 2 m에 불과해 해수면 상승에 매우 취약합니다. :contentReference[oaicite:9]{index=9}  
-- 최근 보도에 따르면 지난 30년간 약 15 cm 수준의 해수면 상승을 지역적으로 경험했으며, 호주 등으로의 이주·기후비자 프로그램 신청이 활발합니다. :contentReference[oaicite:10]{index=10}  
-- 투발루 정부와 국제사회는 (1) 방파제·인공토지 조성, (2) 국제 이주 정책·비자 체계 협상, (3) 문화·주권 보전 전략(디지털 국가화 등)을 병행하고 있습니다. :contentReference[oaicite:11]{index=11}
-""")
-
-st.subheader("참고 보도(요약)")
-st.markdown("""
-- Reuters (2025): 투발루의 많은 주민이 호주의 기후 비자에 신청. 관측상 지난 수십년간 평균 해수면 상승이 지역에 큰 영향을 주고 있음. :contentReference[oaicite:12]{index=12}  
-- Wired / Guardian 등(2025): 투발루의 계획된 이주 사례와 '국가 이주' 논의 관련 기사. :contentReference[oaicite:13]{index=13}
-""")
-
-# ====== 대처 방안 섹션 ======
-st.header("대처 방안(요약) — 완화 + 적응 (정책·개인 실천)")
-st.markdown("""
-**1) 온실가스 감축(완화)**  
-- 화석연료 사용 감축 → 재생에너지 전환, 에너지 효율화. (장기적으로 해수면 상승의 최악 시나리오 완화)
-
-**2) 연안 적응(지역/공공)**  
-- 자연 기반 해안 보호(맹그로브·갯벌 복원), 인공 방파제/방조제, 도시 재배치(Managed retreat), 안전한 이주 계획  
-- 인프라·토지이용 계획(홍수 위험지역 개발 제한), 위기 대비 대피·이주 체계 구축
-
-**3) 개인·학교·지역에서 할 수 있는 일**  
-- 에너지 절약·저탄소 생활, 지역 환경 캠페인 참여, 데이터 기반 기후 교육 확산  
-- 학생/지역사회 단위로 해수면·해안 변화를 모니터링하고 대응 방안(예: 학교 비상대응 계획) 수립
-""")
-
-st.markdown("더 정밀한 분석(예: DEM 기반 침수경계 계산, 지역별 인구 및 자산 피해 추정)을 원하시면 알려주세요. 해당 기능(DEM 연동·국토지리정보원 자료 활용)을 코드에 추가해 드립니다.")
-
-# ====== 출처 안내 ======
-st.header("데이터·정보 출처(주요)")
-st.markdown("""
-- 공공데이터포털: 해양환경공단 해양기후 변화 데이터 (파일/오픈API). :contentReference[oaicite:14]{index=14}  
-- NASA Climate / Vital Signs (Global mean sea level 시계열 개요). :contentReference[oaicite:15]{index=15}  
-- NOAA / NASA 연구 및 위성 관측(위성시대 상승률 관련). :contentReference[oaicite:16]{index=16}  
-- 투발루 관련 최신 보도: Reuters, Wired, Guardian(2024–2025). :contentReference[oaicite:17]{index=17}
-""")
+<p class="report-quote">
+해수면 상승은 개인의 노력을 넘어, 공동의 목소리를 내는 적극적인 행동이 필요합니다. 학교 환경 동아리 활동이나 지역 사회의 환경 캠페인에 참여하여 더 많은 사람들의 관심과 동참을 이끌어내야 합니다.
+</p>
+""", unsafe_allow_html=True)
