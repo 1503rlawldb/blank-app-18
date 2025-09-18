@@ -101,13 +101,32 @@ st.write("""
 st.subheader("청소년 인식 설문 (가상 데이터)")
 st.write("청소년들은 아직 해수면 상승의 문제에 대해 정확하게 인지하지 못하고 있으며, 지금부터 이 보고서를 통해 그 현실이 우리에게도 멀지 않았음을 알려주려 합니다.")
 
-# 가상 데이터 생성
+# 가상 데이터 생성 (가로 차트로 변경)
 chart_data = pd.DataFrame({
-    '응답': ['매우 심각', '어느 정도 심각', '보통', '심각하지 않음', '전혀 모름'],
     '비율 (%)': [15, 35, 25, 15, 10]
-})
-st.bar_chart(chart_data.set_index('응답'), color="#61dafb")
+}, index=['매우 심각', '어느 정도 심각', '보통', '심각하지 않음', '전혀 모름'])
+st.bar_chart(chart_data, horizontal=True, color="#61dafb")
 st.caption("그래프: '해수면 상승 문제의 심각성을 체감하십니까?'에 대한 가상 설문 결과")
+
+# --- 연도별 해수면 상승 데이터 시각화 ---
+st.subheader("연도별 전 세계 평균 해수면 상승 추이")
+st.write("위성 고도계 측정이 시작된 1993년부터 현재까지, 해수면은 꾸준히 상승해왔습니다. 아래 그래프는 1993년을 기준으로 해수면 높이가 얼마나 변화했는지를 보여줍니다. (NASA 데이터 기반 가상 자료)")
+
+# 1993년부터 2024년까지의 가상 데이터 생성
+years = np.arange(1993, 2025)
+# 실제 상승률(연평균 약 3.4mm)을 기반으로 약간의 노이즈를 추가하여 데이터 생성
+base_rise = np.linspace(0, (2024 - 1993) * 3.4, len(years))
+noise = np.random.normal(0, 2, len(years))
+sea_level_rise_mm = base_rise + noise
+sea_level_rise_mm = sea_level_rise_mm - sea_level_rise_mm[0] # 1993년을 0으로 설정
+
+sea_level_data = pd.DataFrame({
+    '연도': years,
+    '해수면 변화 (mm)': sea_level_rise_mm
+})
+
+st.line_chart(sea_level_data.rename(columns={'연도':'index'}).set_index('index'), color="#ff4b4b")
+st.caption("그래프: 1993년 대비 전 세계 평균 해수면 높이 변화(mm). 데이터는 NASA 발표를 기반으로 한 가상 수치입니다.")
 st.divider()
 
 
@@ -188,3 +207,4 @@ st.markdown("""
 해수면 상승은 개인의 노력을 넘어, 공동의 목소리를 내는 적극적인 행동이 필요합니다. 학교 환경 동아리 활동이나 지역 사회의 환경 캠페인에 참여하여 더 많은 사람들의 관심과 동참을 이끌어내야 합니다.
 </p>
 """, unsafe_allow_html=True)
+```eof
