@@ -1,9 +1,9 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import pydeck as pdk
 import requests
 from io import StringIO
+import streamlit.components.v1 as components
 
 # --- 페이지 기본 설정 ---
 st.set_page_config(
@@ -69,26 +69,20 @@ p, li {
     border: 1px solid #d0d0d0;
 }
 
+/* iframe 높이 조절 */
+iframe {
+    height: 600px;
+    border: 1px solid #cccccc;
+    border-radius: 10px;
+}
+
 </style>
 """, unsafe_allow_html=True)
 
 
 # --- 사이드바 ---
-st.sidebar.header("🗺️ 지역별 탐색 및 정보")
-
-# 대륙별 위치 정보
-REGIONS = {
-    "전체 보기": {"lat": 20, "lon": 0, "zoom": 1},
-    "아시아": {"lat": 34, "lon": 100, "zoom": 2.5},
-    "유럽": {"lat": 54, "lon": 15, "zoom": 3},
-    "북아메리카": {"lat": 45, "lon": -100, "zoom": 2.5},
-    "남아메리카": {"lat": -14, "lon": -59, "zoom": 2.5},
-    "아프리카": {"lat": 0, "lon": 15, "zoom": 2.5},
-    "오세아니아 (투발루 포함)": {"lat": -25, "lon": 135, "zoom": 3}
-}
-selected_region = st.sidebar.selectbox("보고 싶은 대륙을 선택하세요:", list(REGIONS.keys()))
-
-st.sidebar.subheader("사례 연구: 투발루의 현실")
+st.sidebar.header("🗺️ 사례 연구")
+st.sidebar.subheader("투발루의 현실")
 st.sidebar.image("https://img.hani.co.kr/imgdb/original/2021/1109/20211109502389.jpg",
              caption="물에 잠긴 국토에서 연설하는 투발루 외교장관 (2021)")
 st.sidebar.info("""
@@ -186,34 +180,26 @@ st.caption("그래프: 1900년 대비 지구 평균 해수면 높이 변화(mm).
 st.divider()
 
 # --- 인터랙티브 시뮬레이션 섹션 ---
-st.header("2. 미래 시뮬레이션: 해수면 상승 영향 분석")
-sea_rise_m = st.slider("가상으로 해수면을 높여보세요 (단위: m)", 0.0, 5.0, 1.0, step=0.1)
-st.info(f"슬라이더를 조작하여 **{sea_rise_m:.1f}m** 이상 해수면이 상승했을 때의 위험 지역(붉은색)을 확인해보세요.")
+st.header("2. 미래 시뮬레이션: 해안 침수 위험도 분석")
+st.info("""
+아래 지도는 해수면 상승에 따른 침수 위험 지역을 보여주는 'Climate Central'의 분석 도구입니다.
+지도를 직접 움직여 원하는 지역을 탐색하고, **지도 왼쪽의 메뉴**를 통해 다양한 설정을 변경하며 미래의 위험도를 확인해보세요.
+- **`Water Level & Projections`**: 해수면 상승 높이(m)를 직접 조절할 수 있습니다.
+- **`Year`**: 특정 연도를 선택하여 RCP 시나리오에 따른 예측을 볼 수 있습니다.
+""")
 
-# 샘플 도시 데이터
-sample_cities = pd.DataFrame([
-    {"place":"투발루 푸나푸티", "continent": "오세아니아 (투발루 포함)", "lat":-8.5240, "lon":179.1942, "elev_m":1.5},
-    {"place":"대한민국 인천", "continent": "아시아", "lat":37.4563, "lon":126.7052, "elev_m":3.5},
-    {"place":"대한민국 부산", "continent": "아시아", "lat":35.1796, "lon":129.0756, "elev_m":2.8},
-    {"place":"중국 상하이", "continent": "아시아", "lat":31.2304, "lon":121.4737, "elev_m": 4.0},
-    {"place":"네덜란드 암스테르담", "continent": "유럽", "lat":52.3702, "lon":4.8952, "elev_m":-2.0},
-    {"place":"이탈리아 베네치아", "continent": "유럽", "lat":45.4408, "lon":12.3155, "elev_m": 1.0},
-    {"place":"베트남 호치민", "continent": "아시아", "lat":10.8231, "lon":106.6297, "elev_m":1.5},
-    {"place":"미국 뉴올리언스", "continent": "북아메리카", "lat":29.9511, "lon":-90.0715, "elev_m":-0.5},
-    {"place":"미국 마이애미", "continent": "북아메리카", "lat":25.7617, "lon":-80.1918, "elev_m": 2.0},
-])
-sample_cities['inundated'] = sample_cities['elev_m'] <= sea_rise_m
-sample_cities['color'] = sample_cities['inundated'].apply(lambda x: [220, 20, 60] if x else [0, 114, 178])
-
-# Pydeck 지도 시각화
-region_info = REGIONS[selected_region]
-view_state = pdk.ViewState(latitude=region_info["lat"], longitude=region_info["lon"], zoom=region_info["zoom"], bearing=0, pitch=20)
-layer = pdk.Layer("ScatterplotLayer", data=sample_cities, get_position='[lon, lat]', get_color='color', get_radius=80000, pickable=True)
-tooltip = {"html": "<b>{place}</b><br/>평균 해발고도: {elev_m} m<br/><b>침수 위험: {inundated}</b>", "style": {"backgroundColor": "#333", "color": "white"}}
-r = pdk.Deck(layers=[layer], initial_view_state=view_state, tooltip=tooltip, map_style='mapbox://styles/mapbox/light-v9')
-st.pydeck_chart(r)
-st.caption("주의: 위 지도는 단순 '평균 해발고도' 비교를 통한 교육용 데모이며, 실제 침수 범위는 조석, 지형, 방어 시설 등에 따라 달라집니다.")
+# Climate Central의 Coastal Risk Screening Tool을 iframe으로 삽입
+# 초기 위치는 대한민국으로 설정
+map_html = """
+<iframe src="https://coastal.climatecentral.org/map/12/127.0248/37.5326/?theme=satellite&map_type=coastal_dem_comparison&elevation_model=coastal_dem&forecast_year=2050&pathway=rcp45&percentile=p50&return_level=return_level_1&slr_model=kopp_2014"
+    width="100%"
+    frameborder="0">
+</iframe>
+"""
+components.html(map_html, height=600)
+st.caption("지도 출처: Climate Central Coastal Risk Screening Tool. 이 지도는 과학적 데이터를 기반으로 하나, 교육 및 참고 목적으로 활용해야 합니다.")
 st.divider()
+
 
 # --- 결론 및 대처방안 ---
 st.header("결론: 투발루의 절박함, 우리의 미래")
