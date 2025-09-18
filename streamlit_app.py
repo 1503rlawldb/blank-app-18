@@ -1,9 +1,9 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
+import pydeck as pdk
 import requests
 from io import StringIO
-import streamlit.components.v1 as components
 
 # --- 페이지 기본 설정 ---
 st.set_page_config(
@@ -69,13 +69,6 @@ p, li {
     border: 1px solid #d0d0d0;
 }
 
-/* iframe 높이 조절 */
-iframe {
-    height: 600px;
-    border: 1px solid #cccccc;
-    border-radius: 10px;
-}
-
 </style>
 """, unsafe_allow_html=True)
 
@@ -107,7 +100,7 @@ st.write("지금 이 순간에도 우리 삶의 터전은 서서히 잠식당하
 st.divider()
 
 
-# --- 데이터 로드 및 시각화 섹션 ---
+# --- 데이터 시각화 섹션 (고정 데이터 사용) ---
 st.header("1. 과거와 현재: 해수면 상승 데이터 분석")
 
 def build_estimated_gmsl():
@@ -118,86 +111,92 @@ def build_estimated_gmsl():
         else: gmsl_mm[i] = (1992 - 1900) * 1.75 + (y - 1992) * 3.4
     return pd.DataFrame({"year": years, "gmsl_mm": gmsl_mm})
 
-col1, col2 = st.columns(2)
-with col1:
-    st.subheader("데이터 소스 선택")
-    uploaded_file = st.file_uploader("CSV 업로드 (data.go.kr)", type=["csv", "txt"])
-    use_remote_noaa = st.checkbox("NOAA/NASA 공개 데이터 자동 불러오기", value=True)
+df = build_estimated_gmsl()
 
-df = None
-if uploaded_file is not None:
-    try:
-        df = pd.read_csv(uploaded_file, encoding='cp949')
-        if '연평균(cm)' in df.columns: df['gmsl_mm'] = df['연평균(cm)'] * 10
-        if '연도' in df.columns: df = df.rename(columns={'연도': 'year'})
-        st.success("업로드한 CSV 로드 완료!")
-    except Exception as e:
-        st.error(f"CSV 로드 오류: {e}.")
-        df = build_estimated_gmsl()
+st.subheader("지구 평균 해수면 변화 (1900-2025 추정치)")
+df_plot = df.copy()
+df_plot = df_plot[(df_plot['year'] >= 1900) & (df_plot['year'] <= 2025)].sort_values('year')
+df_plot['gmsl_mm'] -= df_plot['gmsl_mm'].iloc[0]
 
-elif use_remote_noaa:
-    url = "https://www.star.nesdis.noaa.gov/socd/lsa/SeaLevelRise/slr/slr_sla_gbl_free_txj1j2_90.csv"
-    try:
-        response = requests.get(url)
-        csv_data = StringIO(response.text)
-        df_noaa = pd.read_csv(csv_data, header=1)
-        df_noaa = df_noaa.rename(columns={'year': 'year', 'TOPEX/Poseidon': 'gmsl_mm'})
-        df_estimated = build_estimated_gmsl()
-        df_noaa['gmsl_mm'] = df_noaa['gmsl_mm'] - df_noaa['gmsl_mm'].iloc[0] + df_estimated[df_estimated['year']==1993]['gmsl_mm'].iloc[0]
-        df = df_noaa[['year', 'gmsl_mm']]
-        st.success("NOAA 위성 데이터 로드 완료!")
-    except Exception:
-        st.warning("원격 데이터 로드 실패. 내부 추정 시계열을 사용합니다.")
-        df = build_estimated_gmsl()
-else:
-    df = build_estimated_gmsl()
+st.line_chart(df_plot.rename(columns={'year':'index'}).set_index('index')['gmsl_mm'], color="#ff4b4b")
 
-# 데이터프레임 표준화
-for col in ['year', '연도']:
-    if col in df.columns:
-        df = df.rename(columns={col: 'year'})
-        break
-if 'gmsl_mm' not in df.columns:
-    for col in ['gmsl_mm', 'level', '해수면', '연평균(cm)']:
-        if col in df.columns:
-            df = df.rename(columns={col: 'gmsl_mm'})
-            if col == '연평균(cm)': df['gmsl_mm'] *= 10
-            break
-
-with col2:
-    st.subheader("지구 평균 해수면 변화 (1900-현재)")
-    df_plot = df.copy()
-    if 'year' in df_plot.columns and 'gmsl_mm' in df_plot.columns:
-        df_plot = df_plot[(df_plot['year'] >= 1900) & (df_plot['year'] <= 2025)].sort_values('year')
-        df_plot['gmsl_mm'] -= df_plot['gmsl_mm'].iloc[0]
-        st.line_chart(df_plot.rename(columns={'year':'index'}).set_index('index')['gmsl_mm'], color="#ff4b4b")
-        latest_year = int(df_plot['year'].max())
-        latest_val = float(df_plot.iloc[-1]['gmsl_mm'])
-        st.metric(label=f"{latest_year}년 기준 상대 해수면 상승", value=f"{latest_val:.1f} mm")
-    else:
-        st.warning("데이터 형식을 인식할 수 없습니다.")
-st.caption("그래프: 1900년 대비 지구 평균 해수면 높이 변화(mm).")
+latest_year = int(df_plot['year'].max())
+latest_val = float(df_plot.iloc[-1]['gmsl_mm'])
+st.metric(label=f"{latest_year}년 기준 상대 해수면 상승 (추정)", value=f"{latest_val:.1f} mm")
+st.caption("그래프: 1900년 대비 지구 평균 해수면 높이 변화(mm). 교육 및 설명 목적의 추정치입니다.")
 st.divider()
 
-# --- 인터랙티브 시뮬레이션 섹션 ---
-st.header("2. 미래 시뮬레이션: 해안 침수 위험도 분석")
-st.info("""
-아래 지도는 해수면 상승에 따른 침수 위험 지역을 보여주는 'Climate Central'의 분석 도구입니다.
-지도를 직접 움직여 원하는 지역을 탐색하고, **지도 왼쪽의 메뉴**를 통해 다양한 설정을 변경하며 미래의 위험도를 확인해보세요.
-- **`Water Level & Projections`**: 해수면 상승 높이(m)를 직접 조절할 수 있습니다.
-- **`Year`**: 특정 연도를 선택하여 RCP 시나리오에 따른 예측을 볼 수 있습니다.
-""")
 
-# Climate Central의 Coastal Risk Screening Tool을 iframe으로 삽입
-# 초기 위치는 대한민국으로 설정
-map_html = """
-<iframe src="https://coastal.climatecentral.org/map/12/127.0248/37.5326/?theme=satellite&map_type=coastal_dem_comparison&elevation_model=coastal_dem&forecast_year=2050&pathway=rcp45&percentile=p50&return_level=return_level_1&slr_model=kopp_2014"
-    width="100%"
-    frameborder="0">
-</iframe>
-"""
-components.html(map_html, height=600)
-st.caption("지도 출처: Climate Central Coastal Risk Screening Tool. 이 지도는 과학적 데이터를 기반으로 하나, 교육 및 참고 목적으로 활용해야 합니다.")
+# --- 인터랙티브 시뮬레이션 섹션 (검색 기반) ---
+st.header("2. 미래 시뮬레이션: 지역별 침수 위험도 검색")
+
+# 검색 가능한 도시 정보
+LOCATIONS = {
+    "인천": {"lat": 37.4563, "lon": 126.7052, "elev_m": 3.5, "zoom": 10},
+    "부산": {"lat": 35.1796, "lon": 129.0756, "elev_m": 2.8, "zoom": 10},
+    "목포": {"lat": 34.8118, "lon": 126.3922, "elev_m": 2.0, "zoom": 10},
+    "투발루": {"lat": -8.5240, "lon": 179.1942, "elev_m": 1.5, "zoom": 11},
+    "상하이": {"lat": 31.2304, "lon": 121.4737, "elev_m": 4.0, "zoom": 8},
+    "베네치아": {"lat": 45.4408, "lon": 12.3155, "elev_m": 1.0, "zoom": 12},
+    "뉴올리언스": {"lat": 29.9511, "lon": -90.0715, "elev_m": -0.5, "zoom": 9},
+    "암스테르담": {"lat": 52.3702, "lon": 4.8952, "elev_m": -2.0, "zoom": 10}
+}
+
+search_term = st.text_input("도시 이름을 검색하여 침수 위험도를 확인하세요 (예: 인천, 부산, 투발루)", "")
+cleaned_search = search_term.strip()
+
+if cleaned_search:
+    if cleaned_search in LOCATIONS:
+        location_data = LOCATIONS[cleaned_search]
+
+        st.subheader(f"'{cleaned_search}' 지역 시뮬레이션")
+        sea_rise_m = st.slider(
+            f"'{cleaned_search}'의 가상 해수면 상승 높이 (m)",
+            0.0, 5.0, 1.0, step=0.1, key=f"slider_{cleaned_search}"
+        )
+
+        df_location = pd.DataFrame([location_data])
+        df_location['inundated'] = df_location['elev_m'] <= sea_rise_m
+        df_location['color'] = df_location['inundated'].apply(lambda x: [220, 20, 60] if x else [0, 114, 178])
+        df_location['place'] = cleaned_search
+
+        view_state = pdk.ViewState(
+            latitude=location_data["lat"],
+            longitude=location_data["lon"],
+            zoom=location_data["zoom"],
+            bearing=0,
+            pitch=45
+        )
+
+        layer = pdk.Layer(
+            "ScatterplotLayer",
+            data=df_location,
+            get_position='[lon, lat]',
+            get_color='color',
+            get_radius=5000,
+            pickable=True
+        )
+
+        tooltip = {
+            "html": "<b>{place}</b><br/>평균 해발고도: {elev_m} m<br/><b>침수 위험: {inundated}</b>",
+            "style": {"backgroundColor": "#333", "color": "white"}
+        }
+
+        r = pdk.Deck(
+            layers=[layer],
+            initial_view_state=view_state,
+            tooltip=tooltip,
+            map_style='mapbox://styles/mapbox/light-v9'
+        )
+
+        st.pydeck_chart(r)
+        st.caption(f"'{cleaned_search}' 지역의 평균 해발고도는 약 {location_data['elev_m']}m 입니다. 해수면이 이보다 높아지면 붉은색 점으로 표시됩니다.")
+
+    else:
+        st.warning(f"'{cleaned_search}'에 대한 위치 정보가 없습니다. '인천', '부산', '투발루' 등으로 검색해보세요.")
+else:
+    st.info("도시 이름을 검색하면 해당 위치의 침수 시뮬레이션 지도가 나타납니다.")
+
 st.divider()
 
 
